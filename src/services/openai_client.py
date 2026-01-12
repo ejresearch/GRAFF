@@ -98,7 +98,7 @@ def call_openai_with_retry(
 ) -> str:
     """
     Call OpenAI API with automatic retry on transient failures.
-    Uses the new responses.create() API with gpt-5.2.
+    Uses the Responses API with gpt-5.2.
 
     Args:
         system_prompt: System message to set context
@@ -120,13 +120,14 @@ def call_openai_with_retry(
         tokens = max_tokens or OPENAI_MAX_TOKENS
         logger.debug(f"Calling OpenAI API with model={OPENAI_MODEL}, temp={temperature}, max_tokens={tokens}")
 
-        # Combine system and user prompts for the new API
+        # Combine system and user prompts for Responses API
         combined_input = f"{system_prompt}\n\n---\n\n{user_prompt}"
 
         # Add JSON instruction if response_format is specified
         if response_format:
             combined_input += "\n\nRespond with valid JSON only."
 
+        # Use Responses API for gpt-5.2
         response = client.responses.create(
             model=OPENAI_MODEL,
             input=combined_input
@@ -193,9 +194,19 @@ def call_openai_structured(
         max_tokens=max_tokens
     )
 
-    # Parse JSON
+    # Parse JSON - strip markdown code fences if present
     try:
-        result = json.loads(content)
+        # Remove markdown code fences if present
+        cleaned = content.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]  # Remove ```json
+        elif cleaned.startswith("```"):
+            cleaned = cleaned[3:]  # Remove ```
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]  # Remove trailing ```
+        cleaned = cleaned.strip()
+
+        result = json.loads(cleaned)
         logger.debug("Successfully parsed JSON response")
         return result
     except json.JSONDecodeError as e:

@@ -29,16 +29,19 @@ MAX_FILE_SIZE = 100 * 1024 * 1024
 # Global progress tracker
 progress_tracker: Dict[str, List[Dict]] = {}
 
-def add_progress(job_id: str, phase: str, message: str, status: str = "in_progress"):
-    """Add a progress update for a job"""
+def add_progress(job_id: str, phase: str, message: str, status: str = "in_progress", **kwargs):
+    """Add a progress update for a job with optional stats"""
     if job_id not in progress_tracker:
         progress_tracker[job_id] = []
-    progress_tracker[job_id].append({
+    update = {
         "phase": phase,
         "message": message,
         "status": status,
         "timestamp": __import__('datetime').datetime.now().isoformat()
-    })
+    }
+    # Add any extra stats (sections, propositions, takeaways, latest)
+    update.update(kwargs)
+    progress_tracker[job_id].append(update)
     logger.info(f"Job {job_id}: {phase} - {message}")
 
 @app.get("/chapters/progress/{job_id}")
@@ -105,7 +108,7 @@ async def process_chapter_background(
             book_id,
             chapter_title,
             chapter_id,
-            lambda phase, msg: add_progress(job_id, phase, msg)
+            lambda phase, msg, **kwargs: add_progress(job_id, phase, msg, **kwargs)
         )
         add_progress(job_id, "completed", "Analysis complete!", "completed")
         logger.info(f"Successfully processed chapter: {result.chapter_id}")

@@ -47,7 +47,7 @@ def run_pass1_structure(
     book_id: str,
     chapter_id: str,
     chapter_title: str,
-    progress_callback: Optional[Callable[[str, str], None]] = None
+    progress_callback: Optional[Callable] = None
 ) -> Phase1Comprehension:
     """
     Pass 1: Extract chapter structure.
@@ -63,16 +63,16 @@ def run_pass1_structure(
         book_id: Book identifier
         chapter_id: Chapter identifier
         chapter_title: Chapter title
-        progress_callback: Optional callback(phase, message)
+        progress_callback: Optional callback(phase, message, **kwargs)
 
     Returns:
         Phase1Comprehension with structure data
     """
     logger.info(f"Pass 1 starting: {chapter_id} - {chapter_title}")
 
-    def notify(message: str):
+    def notify(message: str, **kwargs):
         if progress_callback:
-            progress_callback("pass-1", message)
+            progress_callback("pass-1", message, **kwargs)
         logger.info(f"pass-1: {message}")
 
     notify("Extracting chapter structure...")
@@ -109,7 +109,14 @@ Extract the structure and respond with JSON."""
         keywords=keywords
     )
 
-    notify(f"Structure extracted: {len(sections)} sections, {len(key_entities)} entities")
+    # Send stats with progress
+    notify(
+        f"Found {len(sections)} sections, {len(key_entities)} entities, {len(keywords)} keywords",
+        sections=len(sections),
+        entities=len(key_entities),
+        keywords=len(keywords),
+        latest=sections[0].title if sections else None
+    )
     logger.info(f"Pass 1 complete: {len(sections)} sections")
 
     return phase1
@@ -119,7 +126,7 @@ def run_pass2_propositions(
     text: str,
     chapter_id: str,
     structure: Phase1Comprehension,
-    progress_callback: Optional[Callable[[str, str], None]] = None
+    progress_callback: Optional[Callable] = None
 ) -> List[Proposition]:
     """
     Pass 2: Extract propositions within structure.
@@ -130,19 +137,19 @@ def run_pass2_propositions(
         text: Chapter text
         chapter_id: Chapter identifier
         structure: Phase1Comprehension from Pass 1
-        progress_callback: Optional callback(phase, message)
+        progress_callback: Optional callback(phase, message, **kwargs)
 
     Returns:
         List of Proposition objects
     """
     logger.info(f"Pass 2 starting: {chapter_id}")
 
-    def notify(message: str):
+    def notify(message: str, **kwargs):
         if progress_callback:
-            progress_callback("pass-2", message)
+            progress_callback("pass-2", message, **kwargs)
         logger.info(f"pass-2: {message}")
 
-    notify("Extracting propositions...")
+    notify("Extracting propositions...", sections=len(structure.sections))
 
     system_prompt = _load_prompt(PASS2_PROMPT_PATH)
 
@@ -175,7 +182,14 @@ Extract all propositions and respond with JSON."""
         if prop.chapter_id != chapter_id:
             prop.chapter_id = chapter_id
 
-    notify(f"Extracted {len(propositions)} propositions")
+    # Send stats with sample proposition
+    sample_prop = propositions[0].proposition_text if propositions else None
+    notify(
+        f"Extracted {len(propositions)} propositions",
+        sections=len(structure.sections),
+        propositions=len(propositions),
+        latest=sample_prop[:100] + "..." if sample_prop and len(sample_prop) > 100 else sample_prop
+    )
     logger.info(f"Pass 2 complete: {len(propositions)} propositions")
 
     return propositions
@@ -185,7 +199,7 @@ def run_pass3_takeaways(
     chapter_id: str,
     structure: Phase1Comprehension,
     propositions: List[Proposition],
-    progress_callback: Optional[Callable[[str, str], None]] = None
+    progress_callback: Optional[Callable] = None
 ) -> List[KeyTakeaway]:
     """
     Pass 3: Synthesize key takeaways from propositions.
@@ -197,19 +211,23 @@ def run_pass3_takeaways(
         chapter_id: Chapter identifier
         structure: Phase1Comprehension from Pass 1
         propositions: List of Propositions from Pass 2
-        progress_callback: Optional callback(phase, message)
+        progress_callback: Optional callback(phase, message, **kwargs)
 
     Returns:
         List of KeyTakeaway objects
     """
     logger.info(f"Pass 3 starting: {chapter_id}")
 
-    def notify(message: str):
+    def notify(message: str, **kwargs):
         if progress_callback:
-            progress_callback("pass-3", message)
+            progress_callback("pass-3", message, **kwargs)
         logger.info(f"pass-3: {message}")
 
-    notify("Synthesizing key takeaways...")
+    notify(
+        "Synthesizing key takeaways...",
+        sections=len(structure.sections),
+        propositions=len(propositions)
+    )
 
     system_prompt = _load_prompt(PASS3_PROMPT_PATH)
 
@@ -248,7 +266,15 @@ Synthesize key takeaways and respond with JSON."""
         if takeaway.chapter_id != chapter_id:
             takeaway.chapter_id = chapter_id
 
-    notify(f"Synthesized {len(takeaways)} takeaways")
+    # Send stats with sample takeaway
+    sample_takeaway = takeaways[0].text if takeaways else None
+    notify(
+        f"Synthesized {len(takeaways)} takeaways",
+        sections=len(structure.sections),
+        propositions=len(propositions),
+        takeaways=len(takeaways),
+        latest=sample_takeaway[:100] + "..." if sample_takeaway and len(sample_takeaway) > 100 else sample_takeaway
+    )
     logger.info(f"Pass 3 complete: {len(takeaways)} takeaways")
 
     return takeaways

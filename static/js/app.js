@@ -219,11 +219,18 @@ uploadForm.addEventListener('submit', async (e) => {
           return;
         }
 
-        updateProgress(update.phase, update.message);
+        // Extract stats from update
+        const stats = {
+          sections: update.sections,
+          propositions: update.propositions,
+          takeaways: update.takeaways,
+          latest: update.latest
+        };
+        updateProgress(update.phase, update.message, undefined, stats);
 
         if (update.status === 'completed') {
           eventSource.close();
-          updateProgress('completed', 'Analysis complete!', 100);
+          updateProgress('completed', 'Analysis complete!', 100, stats);
           setTimeout(async () => {
             const listResponse = await fetch('/chapters/list');
             const listData = await listResponse.json();
@@ -305,7 +312,7 @@ function showProcessingError(message) {
   document.getElementById('processingMessage').textContent = message;
 }
 
-function updateProgress(phase, message, percent) {
+function updateProgress(phase, message, percent, stats = {}) {
   const phaseMap = {
     'initialization': { label: 'Initializing', percent: 5 },
     'pass-1': { label: 'Pass 1: Structure', percent: 20 },
@@ -341,6 +348,25 @@ function updateProgress(phase, message, percent) {
       indicator.classList.add('complete');
     }
   });
+
+  // Update live stats
+  if (stats.sections !== undefined) {
+    document.getElementById('liveSections').textContent = stats.sections;
+  }
+  if (stats.propositions !== undefined) {
+    document.getElementById('livePropositions').textContent = stats.propositions;
+  }
+  if (stats.takeaways !== undefined) {
+    document.getElementById('liveTakeaways').textContent = stats.takeaways;
+  }
+
+  // Update latest preview
+  if (stats.latest) {
+    const preview = document.getElementById('latestPreview');
+    const previewText = document.getElementById('latestPreviewText');
+    preview.style.display = 'block';
+    previewText.textContent = stats.latest;
+  }
 
   // Update ETA
   const progressETA = document.getElementById('progressETA');
@@ -399,11 +425,15 @@ function renderOutline(data) {
   }
 
   container.innerHTML = sections.map((section, idx) => {
-    // Get propositions for this section
-    const sectionProps = propositions.filter(p => p.unit_id === section.unit_id);
+    // Get propositions for this section (match by prefix for subsections like 1.3.1 -> 1.3)
+    const sectionProps = propositions.filter(p =>
+      p.unit_id === section.unit_id || p.unit_id.startsWith(section.unit_id + '.')
+    );
 
-    // Get takeaways for this section
-    const sectionTakeaways = takeaways.filter(t => t.unit_id === section.unit_id);
+    // Get takeaways for this section (match by prefix)
+    const sectionTakeaways = takeaways.filter(t =>
+      t.unit_id === section.unit_id || (t.unit_id && t.unit_id.startsWith(section.unit_id + '.'))
+    );
 
     const propCount = sectionProps.length;
     const takeawayCount = sectionTakeaways.length;
@@ -509,8 +539,12 @@ window.exportMarkdown = function() {
   sections.forEach(section => {
     md += `### ${section.unit_id}: ${section.title}\n\n`;
 
-    const sectionProps = propositions.filter(p => p.unit_id === section.unit_id);
-    const sectionTakeaways = takeaways.filter(t => t.unit_id === section.unit_id);
+    const sectionProps = propositions.filter(p =>
+      p.unit_id === section.unit_id || p.unit_id.startsWith(section.unit_id + '.')
+    );
+    const sectionTakeaways = takeaways.filter(t =>
+      t.unit_id === section.unit_id || (t.unit_id && t.unit_id.startsWith(section.unit_id + '.'))
+    );
 
     if (sectionProps.length > 0) {
       md += `**Propositions:**\n\n`;

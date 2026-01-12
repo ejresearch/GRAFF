@@ -73,10 +73,10 @@ def digest_chapter_graff(
         chapter_id = f"ch_{uuid.uuid4().hex[:8]}"
         logger.info(f"Auto-generated chapter_id: {chapter_id}")
 
-    def notify(phase: str, message: str):
-        """Send progress update via callback."""
+    def notify(phase: str, message: str, **kwargs):
+        """Send progress update via callback with optional stats."""
         if progress_callback:
-            progress_callback(phase, message)
+            progress_callback(phase, message, **kwargs)
         logger.info(f"{phase}: {message}")
 
     try:
