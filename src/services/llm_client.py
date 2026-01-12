@@ -11,7 +11,7 @@ from typing import Dict, Optional, Any, Callable, List
 import json
 from pathlib import Path
 from ..utils.logging_config import get_logger
-from .openai_client import call_openai_structured, LLMConfigurationError, LLMAPIError
+from .anthropic_client import call_anthropic_structured as call_llm_structured, LLMConfigurationError, LLMAPIError
 from ..models import (
     ChapterAnalysis,
     Phase1Comprehension,
@@ -88,7 +88,7 @@ Chapter Text:
 
 Extract the structure and respond with JSON."""
 
-    response_dict = call_openai_structured(
+    response_dict = call_llm_structured(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         temperature=ANALYSIS_TEMPERATURE,
@@ -166,7 +166,7 @@ CHAPTER TEXT:
 
 Extract all propositions and respond with JSON."""
 
-    response_dict = call_openai_structured(
+    response_dict = call_llm_structured(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         temperature=ANALYSIS_TEMPERATURE,
@@ -250,7 +250,7 @@ PROPOSITIONS ({len(propositions)} total):
 
 Synthesize key takeaways and respond with JSON."""
 
-    response_dict = call_openai_structured(
+    response_dict = call_llm_structured(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         temperature=ANALYSIS_TEMPERATURE,
