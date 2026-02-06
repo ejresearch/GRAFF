@@ -123,7 +123,7 @@
 
     /* Main Content */
     main {
-      max-width: 900px;
+      max-width: 1100px;
       margin: 0 auto;
       padding: 2rem;
     }
@@ -326,9 +326,112 @@
     /* ==================== */
     /* PROCESSING PAGE      */
     /* ==================== */
+    .processing-split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+      min-height: 70vh;
+    }
+
+    .processing-left {
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 1rem;
+      padding: 2rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .processing-right {
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 1rem;
+      padding: 1.5rem;
+      overflow-y: auto;
+      max-height: 70vh;
+    }
+
+    .processing-right-header {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 1rem;
+      position: sticky;
+      top: 0;
+      background: var(--bg-primary);
+      padding-bottom: 0.5rem;
+    }
+
+    .live-data-section {
+      margin-bottom: 1.5rem;
+    }
+
+    .live-data-label {
+      font-size: 0.6875rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .live-data-label .count {
+      background: var(--bg-tertiary);
+      padding: 0.125rem 0.5rem;
+      border-radius: 1rem;
+      font-size: 0.625rem;
+    }
+
+    .live-data-item {
+      background: var(--bg-secondary);
+      border-radius: 0.5rem;
+      padding: 0.625rem 0.875rem;
+      margin-bottom: 0.375rem;
+      font-size: 0.8125rem;
+      line-height: 1.5;
+      animation: slideIn 0.3s ease;
+    }
+
+    .live-data-item.new {
+      background: var(--accent-light);
+    }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .live-data-item-meta {
+      font-size: 0.6875rem;
+      color: var(--text-muted);
+      margin-top: 0.25rem;
+    }
+
+    .live-data-empty {
+      color: var(--text-muted);
+      font-size: 0.8125rem;
+      font-style: italic;
+      padding: 1rem 0;
+    }
+
+    @media (max-width: 900px) {
+      .processing-split {
+        grid-template-columns: 1fr;
+      }
+      .processing-right {
+        max-height: 40vh;
+      }
+    }
+
     .processing-container {
       text-align: center;
-      padding: 3rem 0;
+      padding: 1.5rem 0;
     }
 
     .spinner {
@@ -936,59 +1039,91 @@
     <!-- PAGE 2: PROCESSING   -->
     <!-- ==================== -->
     <div class="page" id="page-processing">
-      <div class="card">
-        <div class="processing-container">
-          <div class="spinner"></div>
-          <div class="processing-title" id="processingTitle">Analyzing Chapter</div>
-          <div class="processing-message" id="processingMessage">Starting analysis...</div>
+      <div class="processing-split">
+        <!-- Left: Progress -->
+        <div class="processing-left">
+          <div class="processing-container">
+            <div class="spinner"></div>
+            <div class="processing-title" id="processingTitle">Analyzing Chapter</div>
+            <div class="processing-message" id="processingMessage">Starting analysis...</div>
 
-          <!-- Progress Bar -->
-          <div class="progress-section">
-            <div class="progress-header">
-              <span id="progressPercent">0%</span>
-              <span id="progressETA">Estimating...</span>
+            <!-- Progress Bar -->
+            <div class="progress-section">
+              <div class="progress-header">
+                <span id="progressPercent">0%</span>
+                <span id="progressETA">Estimating...</span>
+              </div>
+              <div class="progress-bar">
+                <div class="progress-fill" id="progressBar"></div>
+              </div>
             </div>
-            <div class="progress-bar">
-              <div class="progress-fill" id="progressBar"></div>
+
+            <!-- Pass Indicators -->
+            <div class="pass-indicators">
+              <div class="pass-indicator" id="pass1-indicator">
+                <div class="pass-dot"></div>
+                <span>Pass 1: Structure</span>
+              </div>
+              <div class="pass-indicator" id="pass2-indicator">
+                <div class="pass-dot"></div>
+                <span>Pass 2: Propositions</span>
+              </div>
+              <div class="pass-indicator" id="pass3-indicator">
+                <div class="pass-dot"></div>
+                <span>Pass 3: Takeaways</span>
+              </div>
+            </div>
+
+            <!-- Live Stats -->
+            <div class="live-stats">
+              <div class="live-stat">
+                <div class="live-stat-value" id="liveSections">-</div>
+                <div class="live-stat-label">Sections</div>
+              </div>
+              <div class="live-stat">
+                <div class="live-stat-value" id="livePropositions">-</div>
+                <div class="live-stat-label">Propositions</div>
+              </div>
+              <div class="live-stat">
+                <div class="live-stat-value" id="liveTakeaways">-</div>
+                <div class="live-stat-label">Takeaways</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Live Data -->
+        <div class="processing-right">
+          <div class="processing-right-header">Live Extraction</div>
+
+          <!-- Sections -->
+          <div class="live-data-section" id="liveSectionsPanel">
+            <div class="live-data-label">
+              Sections <span class="count" id="liveSectionsCount">0</span>
+            </div>
+            <div id="liveSectionsList">
+              <div class="live-data-empty">Waiting for Pass 1...</div>
             </div>
           </div>
 
-          <!-- Pass Indicators -->
-          <div class="pass-indicators">
-            <div class="pass-indicator" id="pass1-indicator">
-              <div class="pass-dot"></div>
-              <span>Pass 1: Structure</span>
+          <!-- Propositions -->
+          <div class="live-data-section" id="livePropositionsPanel">
+            <div class="live-data-label">
+              Propositions <span class="count" id="livePropositionsCount">0</span>
             </div>
-            <div class="pass-indicator" id="pass2-indicator">
-              <div class="pass-dot"></div>
-              <span>Pass 2: Propositions</span>
-            </div>
-            <div class="pass-indicator" id="pass3-indicator">
-              <div class="pass-dot"></div>
-              <span>Pass 3: Takeaways</span>
+            <div id="livePropositionsList">
+              <div class="live-data-empty">Waiting for Pass 2...</div>
             </div>
           </div>
 
-          <!-- Live Stats -->
-          <div class="live-stats">
-            <div class="live-stat">
-              <div class="live-stat-value" id="liveSections">-</div>
-              <div class="live-stat-label">Sections</div>
+          <!-- Takeaways -->
+          <div class="live-data-section" id="liveTakeawaysPanel">
+            <div class="live-data-label">
+              Takeaways <span class="count" id="liveTakeawaysCount">0</span>
             </div>
-            <div class="live-stat">
-              <div class="live-stat-value" id="livePropositions">-</div>
-              <div class="live-stat-label">Propositions</div>
+            <div id="liveTakeawaysList">
+              <div class="live-data-empty">Waiting for Pass 3...</div>
             </div>
-            <div class="live-stat">
-              <div class="live-stat-value" id="liveTakeaways">-</div>
-              <div class="live-stat-label">Takeaways</div>
-            </div>
-          </div>
-
-          <!-- Latest Preview -->
-          <div class="latest-preview" id="latestPreview" style="display: none;">
-            <div class="latest-preview-header">Latest Finding</div>
-            <div class="latest-preview-text" id="latestPreviewText"></div>
           </div>
         </div>
       </div>

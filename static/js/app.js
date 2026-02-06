@@ -1,6 +1,7 @@
 // State
 let currentResults = null;
 let currentPage = 'home';
+let liveData = { sections: [], propositions: [], takeaways: [] };
 
 // DOM Elements
 const uploadForm = document.getElementById('uploadForm');
@@ -270,12 +271,20 @@ function resetProcessingUI() {
   document.getElementById('liveSections').textContent = '-';
   document.getElementById('livePropositions').textContent = '-';
   document.getElementById('liveTakeaways').textContent = '-';
-  document.getElementById('latestPreview').style.display = 'none';
 
   ['pass1', 'pass2', 'pass3'].forEach(pass => {
     const indicator = document.getElementById(`${pass}-indicator`);
     indicator.classList.remove('active', 'complete');
   });
+
+  // Reset live data
+  liveData = { sections: [], propositions: [], takeaways: [] };
+  document.getElementById('liveSectionsList').innerHTML = '<div class="live-data-empty">Waiting for Pass 1...</div>';
+  document.getElementById('livePropositionsList').innerHTML = '<div class="live-data-empty">Waiting for Pass 2...</div>';
+  document.getElementById('liveTakeawaysList').innerHTML = '<div class="live-data-empty">Waiting for Pass 3...</div>';
+  document.getElementById('liveSectionsCount').textContent = '0';
+  document.getElementById('livePropositionsCount').textContent = '0';
+  document.getElementById('liveTakeawaysCount').textContent = '0';
 }
 
 function pollForCompletion() {
@@ -310,6 +319,49 @@ function pollForCompletion() {
 function showProcessingError(message) {
   document.getElementById('processingTitle').textContent = 'Error';
   document.getElementById('processingMessage').textContent = message;
+}
+
+function addLiveDataItem(phase, text) {
+  if (!text) return;
+
+  let listId, dataKey;
+  if (phase === 'pass-1') {
+    listId = 'liveSectionsList';
+    dataKey = 'sections';
+  } else if (phase === 'pass-2') {
+    listId = 'livePropositionsList';
+    dataKey = 'propositions';
+  } else if (phase === 'pass-3') {
+    listId = 'liveTakeawaysList';
+    dataKey = 'takeaways';
+  } else {
+    return;
+  }
+
+  // Skip if we've already added this item
+  if (liveData[dataKey].includes(text)) return;
+  liveData[dataKey].push(text);
+
+  const list = document.getElementById(listId);
+
+  // Remove "waiting" message on first item
+  const emptyMsg = list.querySelector('.live-data-empty');
+  if (emptyMsg) emptyMsg.remove();
+
+  // Create new item
+  const item = document.createElement('div');
+  item.className = 'live-data-item new';
+  item.textContent = text.length > 150 ? text.substring(0, 150) + '...' : text;
+
+  // Insert at top
+  list.insertBefore(item, list.firstChild);
+
+  // Remove "new" highlight after animation
+  setTimeout(() => item.classList.remove('new'), 1500);
+
+  // Auto-scroll to show new items
+  const panel = document.querySelector('.processing-right');
+  if (panel) panel.scrollTop = 0;
 }
 
 function updateProgress(phase, message, percent, stats = {}) {
@@ -352,20 +404,20 @@ function updateProgress(phase, message, percent, stats = {}) {
   // Update live stats
   if (stats.sections !== undefined) {
     document.getElementById('liveSections').textContent = stats.sections;
+    document.getElementById('liveSectionsCount').textContent = stats.sections;
   }
   if (stats.propositions !== undefined) {
     document.getElementById('livePropositions').textContent = stats.propositions;
+    document.getElementById('livePropositionsCount').textContent = stats.propositions;
   }
   if (stats.takeaways !== undefined) {
     document.getElementById('liveTakeaways').textContent = stats.takeaways;
+    document.getElementById('liveTakeawaysCount').textContent = stats.takeaways;
   }
 
-  // Update latest preview
+  // Add latest item to live data panel
   if (stats.latest) {
-    const preview = document.getElementById('latestPreview');
-    const previewText = document.getElementById('latestPreviewText');
-    preview.style.display = 'block';
-    previewText.textContent = stats.latest;
+    addLiveDataItem(phase, stats.latest);
   }
 
   // Update ETA
