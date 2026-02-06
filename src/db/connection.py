@@ -168,14 +168,14 @@ def save_chapter_analysis(chapter: ChapterAnalysis) -> bool:
                 logger.error(f"Valid unit_ids: {sorted(valid_unit_ids)}")
                 raise ValueError(f"Takeaway references non-existent unit_id: {takeaway.unit_id}")
 
-        # Validate proposition_ids in takeaways
+        # Validate proposition_ids in takeaways - filter out invalid refs instead of failing
         valid_prop_ids = {prop.proposition_id for prop in chapter.phase2.propositions}
         for takeaway in chapter.phase2.key_takeaways:
             invalid_refs = [pid for pid in takeaway.proposition_ids if pid not in valid_prop_ids]
             if invalid_refs:
-                logger.error(f"Takeaway {takeaway.takeaway_id} references invalid proposition IDs: {invalid_refs}")
-                logger.error(f"Valid proposition IDs: {sorted(valid_prop_ids)}")
-                raise ValueError(f"Takeaway references non-existent propositions: {invalid_refs}")
+                logger.warning(f"Takeaway {takeaway.takeaway_id} references invalid proposition IDs (removing): {invalid_refs}")
+                # Filter out invalid references instead of failing
+                takeaway.proposition_ids = [pid for pid in takeaway.proposition_ids if pid in valid_prop_ids]
 
         # Check if chapter already exists
         cursor.execute("SELECT id FROM chapters WHERE chapter_id = ?", (chapter.chapter_id,))
@@ -491,6 +491,208 @@ def delete_chapter(chapter_id: str, conn: Optional[sqlite3.Connection] = None) -
     finally:
         if should_close:
             conn.close()
+
+
+def save_chapter_phase1(
+    chapter_id: str,
+    book_id: str,
+    chapter_title: str,
+    phase1: 'Phase1Comprehension',
+    schema_version: str = "1.0"
+) -> bool:
+    """
+    Save Phase 1 data (chapter metadata + structure) incrementally.
+
+    Creates the chapter record and saves sections, entities, keywords.
+    Can be called early in the pipeline so data is persisted before Pass 2.
+
+    Args:
+        chapter_id: Unique chapter identifier
+        book_id: Book identifier
+        chapter_title: Chapter title
+        phase1: Phase1Comprehension with structure data
+        schema_version: Schema version string
+
+    Returns:
+        bool: True if successful
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Check if chapter already exists - delete if so
+        cursor.execute("SELECT id FROM chapters WHERE chapter_id = ?", (chapter_id,))
+        existing = cursor.fetchone()
+        if existing:
+            logger.warning(f"Chapter {chapter_id} already exists, replacing...")
+            cursor.execute("DELETE FROM chapters WHERE chapter_id = ?", (chapter_id,))
+
+        # Insert chapter metadata
+        cursor.execute("""
+            INSERT INTO chapters (book_id, chapter_id, chapter_title, summary, schema_version)
+            VALUES (?, ?, ?, ?, ?)
+        """, (book_id, chapter_id, chapter_title, phase1.summary, schema_version))
+
+        # Insert sections
+        for section in phase1.sections:
+            cursor.execute("""
+                INSERT INTO sections (chapter_id, unit_id, title, level, parent_unit_id, start_location, end_location)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                chapter_id,
+                section.unit_id,
+                section.title,
+                section.level,
+                section.parent_unit_id,
+                section.start_location,
+                section.end_location
+            ))
+
+        # Insert entities
+        for entity in phase1.key_entities:
+            cursor.execute("""
+                INSERT INTO entities (chapter_id, name, type)
+                VALUES (?, ?, ?)
+            """, (chapter_id, entity.name, entity.type))
+
+        # Insert keywords
+        for keyword in phase1.keywords:
+            cursor.execute("""
+                INSERT INTO keywords (chapter_id, keyword)
+                VALUES (?, ?)
+            """, (chapter_id, keyword))
+
+        conn.commit()
+        logger.info(f"Phase 1 saved: {chapter_id} ({len(phase1.sections)} sections)")
+        return True
+
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Failed to save Phase 1 for {chapter_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def save_propositions(chapter_id: str, propositions: List[Proposition]) -> bool:
+    """
+    Save propositions incrementally (can be called per section or all at once).
+
+    Args:
+        chapter_id: Chapter identifier (must already exist in DB)
+        propositions: List of Proposition objects to save
+
+    Returns:
+        bool: True if successful
+    """
+    if not propositions:
+        return True
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+
+        for prop in propositions:
+            # Use INSERT OR REPLACE to handle re-runs
+            cursor.execute("""
+                INSERT OR REPLACE INTO propositions
+                (id, chapter_id, unit_id, proposition_text, bloom_level, bloom_verb, evidence_location, source_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                prop.proposition_id,
+                chapter_id,
+                prop.unit_id,
+                prop.proposition_text,
+                prop.bloom_level,
+                prop.bloom_verb,
+                prop.evidence_location,
+                prop.source_type
+            ))
+
+            # Delete existing tags and re-insert
+            cursor.execute("DELETE FROM proposition_tags WHERE proposition_id = ?", (prop.proposition_id,))
+            for tag in prop.tags:
+                cursor.execute("""
+                    INSERT INTO proposition_tags (proposition_id, tag)
+                    VALUES (?, ?)
+                """, (prop.proposition_id, tag))
+
+        conn.commit()
+        logger.info(f"Saved {len(propositions)} propositions for {chapter_id}")
+        return True
+
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Failed to save propositions for {chapter_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def save_takeaways(chapter_id: str, takeaways: List[KeyTakeaway]) -> bool:
+    """
+    Save takeaways incrementally.
+
+    Args:
+        chapter_id: Chapter identifier (must already exist in DB)
+        takeaways: List of KeyTakeaway objects to save
+
+    Returns:
+        bool: True if successful
+    """
+    if not takeaways:
+        return True
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Get valid proposition IDs for this chapter
+        cursor.execute("SELECT id FROM propositions WHERE chapter_id = ?", (chapter_id,))
+        valid_prop_ids = {row['id'] for row in cursor.fetchall()}
+
+        for takeaway in takeaways:
+            # Use INSERT OR REPLACE
+            cursor.execute("""
+                INSERT OR REPLACE INTO key_takeaways (id, chapter_id, unit_id, text, dominant_bloom_level)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                takeaway.takeaway_id,
+                chapter_id,
+                takeaway.unit_id,
+                takeaway.text,
+                takeaway.dominant_bloom_level
+            ))
+
+            # Delete existing links and tags
+            cursor.execute("DELETE FROM takeaway_propositions WHERE takeaway_id = ?", (takeaway.takeaway_id,))
+            cursor.execute("DELETE FROM takeaway_tags WHERE takeaway_id = ?", (takeaway.takeaway_id,))
+
+            # Insert proposition links (only valid ones)
+            for prop_id in takeaway.proposition_ids:
+                if prop_id in valid_prop_ids:
+                    cursor.execute("""
+                        INSERT INTO takeaway_propositions (takeaway_id, proposition_id)
+                        VALUES (?, ?)
+                    """, (takeaway.takeaway_id, prop_id))
+
+            # Insert tags
+            for tag in takeaway.tags:
+                cursor.execute("""
+                    INSERT INTO takeaway_tags (takeaway_id, tag)
+                    VALUES (?, ?)
+                """, (takeaway.takeaway_id, tag))
+
+        conn.commit()
+        logger.info(f"Saved {len(takeaways)} takeaways for {chapter_id}")
+        return True
+
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Failed to save takeaways for {chapter_id}: {e}")
+        return False
+    finally:
+        conn.close()
 
 
 def get_propositions_by_bloom(chapter_id: str, bloom_level: str) -> List[Proposition]:

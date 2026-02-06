@@ -31,6 +31,7 @@ ANALYSIS_TEMPERATURE = 0.15
 PROMPT_DIR = Path(__file__).parent.parent.parent / "prompts"
 PASS1_PROMPT_PATH = PROMPT_DIR / "pass1_structure.txt"
 PASS2_PROMPT_PATH = PROMPT_DIR / "pass2_propositions.txt"
+PASS2_SECTION_PROMPT_PATH = PROMPT_DIR / "pass2_section.txt"
 PASS3_PROMPT_PATH = PROMPT_DIR / "pass3_takeaways.txt"
 
 
@@ -122,6 +123,191 @@ Extract the structure and respond with JSON."""
     return phase1
 
 
+def _find_section_text(full_text: str, section: Section, all_sections: List[Section]) -> str:
+    """
+    Extract just the text for a specific section from the full chapter.
+
+    Finds the section heading and extracts text until the next section heading.
+    Falls back to full text if section can't be located.
+    """
+    import re
+
+    # Find this section's position
+    # Try exact title match first, then fuzzy
+    section_pattern = re.escape(section.title)
+    match = re.search(rf'(?:^|\n).*?{section_pattern}', full_text, re.IGNORECASE)
+
+    if not match:
+        # Can't find section, return truncated full text
+        logger.warning(f"Could not locate section '{section.title}' in text, using truncated text")
+        return full_text[:15000]  # ~15k chars max fallback
+
+    start_pos = match.start()
+
+    # Find the next section's position
+    end_pos = len(full_text)
+
+    # Get sections that come after this one
+    current_idx = next((i for i, s in enumerate(all_sections) if s.unit_id == section.unit_id), -1)
+
+    if current_idx >= 0 and current_idx < len(all_sections) - 1:
+        # Look for the next section's title
+        next_section = all_sections[current_idx + 1]
+        next_pattern = re.escape(next_section.title)
+        next_match = re.search(rf'(?:^|\n).*?{next_pattern}', full_text[start_pos + 1:], re.IGNORECASE)
+        if next_match:
+            end_pos = start_pos + 1 + next_match.start()
+
+    section_text = full_text[start_pos:end_pos].strip()
+
+    # Return full section text - chunking handled by caller if needed
+    return section_text
+
+
+def _chunk_text(text: str, max_chunk_size: int = 4000, overlap: int = 200) -> List[str]:
+    """
+    Split text into chunks at paragraph boundaries.
+
+    Args:
+        text: Text to split
+        max_chunk_size: Maximum characters per chunk
+        overlap: Characters to overlap between chunks for context
+
+    Returns:
+        List of text chunks
+    """
+    if len(text) <= max_chunk_size:
+        return [text]
+
+    chunks = []
+    paragraphs = text.split('\n\n')
+    current_chunk = ""
+
+    for para in paragraphs:
+        # If adding this paragraph exceeds limit, save current chunk and start new
+        if len(current_chunk) + len(para) + 2 > max_chunk_size and current_chunk:
+            chunks.append(current_chunk.strip())
+            # Start new chunk with overlap from end of previous
+            if overlap > 0 and len(current_chunk) > overlap:
+                current_chunk = current_chunk[-overlap:] + "\n\n" + para
+            else:
+                current_chunk = para
+        else:
+            current_chunk = current_chunk + "\n\n" + para if current_chunk else para
+
+    # Don't forget the last chunk
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+
+    return chunks if chunks else [text]
+
+
+def _extract_chunk_propositions(
+    chunk_text: str,
+    chapter_id: str,
+    section: Section,
+    system_prompt: str,
+    chunk_num: int = 1,
+    total_chunks: int = 1
+) -> List[Proposition]:
+    """
+    Extract propositions from a single chunk of section text.
+    """
+    user_prompt = f"""Chapter ID: {chapter_id}
+
+TARGET SECTION:
+- unit_id: {section.unit_id}
+- title: {section.title}
+- level: {section.level}
+
+SECTION TEXT (part {chunk_num}/{total_chunks}):
+{chunk_text}
+
+Extract propositions from this section text.
+Respond with JSON only."""
+
+    try:
+        response_dict = call_llm_structured(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=ANALYSIS_TEMPERATURE,
+            json_schema=None,
+            max_tokens=8000  # Smaller chunks need fewer output tokens
+        )
+
+        propositions = [Proposition.model_validate(p) for p in response_dict.get("propositions", [])]
+
+        # Fix chapter_id and unit_id if needed
+        for prop in propositions:
+            if prop.chapter_id != chapter_id:
+                prop.chapter_id = chapter_id
+            if prop.unit_id != section.unit_id:
+                prop.unit_id = section.unit_id
+
+        return propositions
+
+    except Exception as e:
+        logger.error(f"Failed to extract propositions from chunk {chunk_num} of section {section.unit_id}: {e}")
+        return []
+
+
+def _extract_section_propositions(
+    text: str,
+    chapter_id: str,
+    section: Section,
+    all_sections: List[Section],
+    system_prompt: str,
+    max_retries: int = 2
+) -> List[Proposition]:
+    """
+    Extract propositions from a single section, chunking if necessary.
+
+    Args:
+        text: Full chapter text
+        chapter_id: Chapter identifier
+        section: Section to extract from
+        all_sections: All sections (for finding boundaries)
+        system_prompt: Loaded prompt template
+        max_retries: Number of retries with increased tokens on truncation
+
+    Returns:
+        List of Proposition objects for this section
+    """
+    # Extract just this section's text
+    section_text = _find_section_text(text, section, all_sections)
+    logger.debug(f"Section '{section.title}' text: {len(section_text)} chars")
+
+    # Chunk large sections to avoid output truncation
+    # 4000 chars input ≈ 30-50 propositions ≈ 6000-8000 tokens output
+    chunks = _chunk_text(section_text, max_chunk_size=4000, overlap=100)
+
+    if len(chunks) > 1:
+        logger.info(f"Section '{section.title}' split into {len(chunks)} chunks")
+
+    all_propositions = []
+    seen_texts = set()  # Deduplicate propositions from overlapping chunks
+
+    for i, chunk in enumerate(chunks):
+        chunk_props = _extract_chunk_propositions(
+            chunk_text=chunk,
+            chapter_id=chapter_id,
+            section=section,
+            system_prompt=system_prompt,
+            chunk_num=i + 1,
+            total_chunks=len(chunks)
+        )
+
+        # Deduplicate based on proposition text
+        for prop in chunk_props:
+            text_key = prop.proposition_text.strip().lower()
+            if text_key not in seen_texts:
+                seen_texts.add(text_key)
+                all_propositions.append(prop)
+
+    logger.info(f"Section {section.unit_id}: {len(all_propositions)} propositions from {len(chunks)} chunk(s)")
+    return all_propositions
+
+
 def run_pass2_propositions(
     text: str,
     chapter_id: str,
@@ -129,9 +315,10 @@ def run_pass2_propositions(
     progress_callback: Optional[Callable] = None
 ) -> List[Proposition]:
     """
-    Pass 2: Extract propositions within structure.
+    Pass 2: Extract propositions section by section.
 
-    Uses structure from Pass 1 to tag propositions with unit_ids.
+    Processes each section from Pass 1 independently to avoid token limits.
+    This scales to any chapter size.
 
     Args:
         text: Chapter text
@@ -142,57 +329,58 @@ def run_pass2_propositions(
     Returns:
         List of Proposition objects
     """
-    logger.info(f"Pass 2 starting: {chapter_id}")
+    logger.info(f"Pass 2 starting: {chapter_id} ({len(structure.sections)} sections)")
 
     def notify(message: str, **kwargs):
         if progress_callback:
             progress_callback("pass-2", message, **kwargs)
         logger.info(f"pass-2: {message}")
 
-    notify("Extracting propositions...", sections=len(structure.sections))
+    # Load prompt once
+    system_prompt = _load_prompt(PASS2_SECTION_PROMPT_PATH)
 
-    system_prompt = _load_prompt(PASS2_PROMPT_PATH)
+    all_propositions: List[Proposition] = []
+    total_sections = len(structure.sections)
 
-    # Format structure for context
-    sections_json = json.dumps([s.model_dump() for s in structure.sections], indent=2)
+    notify(f"Extracting propositions from {total_sections} sections...", sections=total_sections)
 
-    user_prompt = f"""Chapter ID: {chapter_id}
+    # Process each section
+    for i, section in enumerate(structure.sections):
+        section_num = i + 1
+        notify(
+            f"Section {section_num}/{total_sections}: {section.title}",
+            sections=total_sections,
+            current_section=section_num,
+            propositions=len(all_propositions),
+            latest=section.title
+        )
 
-STRUCTURE (from Pass 1):
-{sections_json}
+        section_props = _extract_section_propositions(
+            text=text,
+            chapter_id=chapter_id,
+            section=section,
+            all_sections=structure.sections,
+            system_prompt=system_prompt
+        )
 
-CHAPTER TEXT:
-{text}
+        all_propositions.extend(section_props)
+        logger.info(f"Section {section.unit_id}: {len(section_props)} propositions (total: {len(all_propositions)})")
 
-Extract all propositions and respond with JSON."""
+    # Renumber proposition IDs to ensure uniqueness
+    for i, prop in enumerate(all_propositions):
+        prop.proposition_id = f"{chapter_id}_{prop.unit_id}_p{i+1:03d}"
 
-    response_dict = call_llm_structured(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=ANALYSIS_TEMPERATURE,
-        json_schema=None,
-        max_tokens=16000
-    )
-
-    # Parse propositions
-    propositions = [Proposition.model_validate(p) for p in response_dict.get("propositions", [])]
-
-    # Fix chapter_id if needed
-    for prop in propositions:
-        if prop.chapter_id != chapter_id:
-            prop.chapter_id = chapter_id
-
-    # Send stats with sample proposition
-    sample_prop = propositions[0].proposition_text if propositions else None
+    # Final stats
+    sample_prop = all_propositions[0].proposition_text if all_propositions else None
     notify(
-        f"Extracted {len(propositions)} propositions",
-        sections=len(structure.sections),
-        propositions=len(propositions),
+        f"Extracted {len(all_propositions)} propositions from {total_sections} sections",
+        sections=total_sections,
+        propositions=len(all_propositions),
         latest=sample_prop[:100] + "..." if sample_prop and len(sample_prop) > 100 else sample_prop
     )
-    logger.info(f"Pass 2 complete: {len(propositions)} propositions")
+    logger.info(f"Pass 2 complete: {len(all_propositions)} propositions from {total_sections} sections")
 
-    return propositions
+    return all_propositions
 
 
 def run_pass3_takeaways(
@@ -331,6 +519,23 @@ def run_three_pass_analysis(
         propositions=propositions,
         progress_callback=progress_callback
     )
+
+    # Validate and fix takeaway proposition references
+    valid_prop_ids = {p.proposition_id for p in propositions}
+    valid_unit_ids = {s.unit_id for s in structure.sections}
+
+    for takeaway in takeaways:
+        # Filter out invalid proposition references
+        original_count = len(takeaway.proposition_ids)
+        takeaway.proposition_ids = [pid for pid in takeaway.proposition_ids if pid in valid_prop_ids]
+        if len(takeaway.proposition_ids) < original_count:
+            removed = original_count - len(takeaway.proposition_ids)
+            logger.warning(f"Takeaway {takeaway.takeaway_id}: removed {removed} invalid proposition references")
+
+        # Fix invalid unit_id references
+        if takeaway.unit_id and takeaway.unit_id not in valid_unit_ids:
+            logger.warning(f"Takeaway {takeaway.takeaway_id}: invalid unit_id '{takeaway.unit_id}', setting to None")
+            takeaway.unit_id = None
 
     # Assemble Phase2Output
     phase2 = Phase2Output(

@@ -1,4 +1,5 @@
 import os
+import json
 from typing import Dict, Any, Optional
 import anthropic
 from tenacity import (
@@ -139,6 +140,73 @@ def call_anthropic_with_retry(
         raise LLMAPIError(f"Anthropic API call failed: {str(e)}")
 
 
+def _salvage_truncated_json(content: str) -> Optional[Dict[str, Any]]:
+    """
+    Attempt to salvage a truncated JSON response by finding complete array items.
+
+    Works for responses like {"propositions": [...]} or {"key_takeaways": [...]}
+    where the array was cut off mid-item.
+    """
+    import re
+
+    # Find the last complete object in an array
+    # Look for patterns like }, { or }, ] that indicate complete items
+
+    # Try to find propositions or key_takeaways array
+    for key in ['propositions', 'key_takeaways', 'sections']:
+        pattern = rf'"{key}"\s*:\s*\['
+        match = re.search(pattern, content)
+        if match:
+            start = match.end()
+            # Find all complete objects (ending with })
+            # Work backwards from end to find last complete object
+            bracket_count = 1
+            last_complete = -1
+            i = start
+            in_string = False
+            escape_next = False
+
+            while i < len(content) and bracket_count > 0:
+                char = content[i]
+
+                if escape_next:
+                    escape_next = False
+                    i += 1
+                    continue
+
+                if char == '\\':
+                    escape_next = True
+                    i += 1
+                    continue
+
+                if char == '"':
+                    in_string = not in_string
+                elif not in_string:
+                    if char == '{':
+                        bracket_count += 1
+                    elif char == '}':
+                        bracket_count -= 1
+                        if bracket_count == 1:  # Just closed an object in the array
+                            last_complete = i
+                    elif char == '[':
+                        bracket_count += 1
+                    elif char == ']':
+                        bracket_count -= 1
+
+                i += 1
+
+            if last_complete > 0:
+                # Reconstruct valid JSON
+                salvaged = content[:last_complete + 1] + ']}'
+                try:
+                    result = json.loads(salvaged)
+                    return result
+                except json.JSONDecodeError:
+                    pass
+
+    return None
+
+
 def call_anthropic_structured(
     system_prompt: str,
     user_prompt: str,
@@ -191,6 +259,12 @@ def call_anthropic_structured(
         logger.debug("Successfully parsed JSON response")
         return result
     except json.JSONDecodeError as e:
+        # Try to salvage truncated JSON arrays
+        logger.warning(f"JSON parse failed, attempting to salvage: {e}")
+        salvaged = _salvage_truncated_json(cleaned)
+        if salvaged:
+            logger.info(f"Salvaged partial JSON with {len(salvaged.get('propositions', []))} items")
+            return salvaged
         logger.error(f"Failed to parse JSON response: {e}")
         logger.error(f"Response content: {content[:500]}...")
         raise LLMAPIError(f"Invalid JSON response from Anthropic: {str(e)}")
